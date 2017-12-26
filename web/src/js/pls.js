@@ -17,7 +17,6 @@ class Pls {
     this.token = new this.web3.eth.Contract(tokenABI, tokenAddr)
     this.decimals = 18
     this.secret = this.web3.utils.utf8ToHex('ethereum')
-    this.nonce = 256
   }
 
   encodeHex(str, zPadLength) {
@@ -31,24 +30,30 @@ class Pls {
     return str.padStart(zPadLength, '0')
   }
 
-  SecretHash(account, guess, func, betId, secret, nonce, callback) {
-    console.log('utf8ToHex', nonce, guess, this.web3.utils.utf8ToHex(secret))
+  SecretHash(account, guess, secret, nonce, callback) {
+    console.log('SecretHash', nonce, guess, this.web3.utils.utf8ToHex('secret'))
     return this.contract.methods.calculateSecretHash(nonce, guess, this.web3.utils.utf8ToHex(secret)).call({from: account}, (err, info) => {
       if (err) {
         console.error(err)
         return callback(err)
       }
-      let calResult = ''
-      if (func === 'betWithRound') {
-        calResult = abi.methodID('betWithRound', ['uint256', 'bytes32']).toString('hex') +
-          abi.rawEncode(['uint256', 'bytes32'], [`${betId}`, info]).toString('hex')
-      } else {
-        calResult = abi.methodID('startRoundWithFirstBet', ['uint256', 'uint256', 'uint256', 'bytes32']).toString('hex') +
-          abi.rawEncode(['uint256', 'uint256', 'uint256', 'bytes32'], ["2", "100", "100", info]).toString('hex')
-      }
-      return callback(null, calResult)
+      return callback(null, info)
+
     })
   }
+
+  abiHash(round_id, func, hash, callback) {
+    let calResult = ''
+    if (func === 'betWithRound') {
+      calResult = abi.methodID('betWithRound', ['uint256', 'bytes32']).toString('hex') +
+        abi.rawEncode(['uint256', 'bytes32'], [`${round_id}`, hash]).toString('hex')
+    } else {
+      calResult = abi.methodID('startRoundWithFirstBet', ['uint256', 'uint256', 'uint256', 'bytes32']).toString('hex') +
+        abi.rawEncode(['uint256', 'uint256', 'uint256', 'bytes32'], ["2", "100", "100", hash]).toString('hex')
+    }
+    return callback(null, calResult)
+  }
+
 
   num2bal(value) {
     return Math.floor(value * Math.pow(10, this.decimals))
@@ -75,7 +80,6 @@ class Pls {
 
   doBet(account, deposit, hexStrToBytes, callback) {
     deposit = this.web3.utils.toWei(`${deposit}`, "ether")
-    let confirm = 20
     return this.token.methods.balanceOf(account).call({from: account}, (err, balance) => {
       if (err) {
         return callback(err)
@@ -92,42 +96,49 @@ class Pls {
         .on('receipt', function (receipt) {
         })
         .on('confirmation', function (confirmationNumber, receipt) {
-          if (confirmationNumber == confirm) {
+          if (confirmationNumber >= 10) {
             return callback(null, receipt)
           }
         })
         .on('error', console.error)
+        .then(function () {
+          return callback(null, null)
+        })
     })
   }
 
   mintToken(account, to, deposit, callback) {//token mint
-    let confirm = 20
     return this.token.methods.mint(to, this.web3.utils.toWei(`${deposit}`, "ether")).send({from: account})
       .on('transactionHash', function (hash) {
       })
       .on('receipt', function (receipt) {
       })
       .on('confirmation', function (confirmationNumber, receipt) {
-        if (confirmationNumber == confirm) {
+        if (confirmationNumber >= 10) {
           return callback(null, receipt)
         }
       })
       .on('error', console.error)
+      .then(function () {
+        return callback(null, null)
+      })
   }
 
   transToken(account, to, deposit, callback) {//token mint
-    let confirm = 20
     return this.token.methods.transferFrom(account, to, this.web3.utils.toWei(`${deposit}`, "ether")).send({from: account})
       .on('transactionHash', function (hash) {
       })
       .on('receipt', function (receipt) {
       })
       .on('confirmation', function (confirmationNumber, receipt) {
-        if (confirmationNumber == confirm) {
+        if (confirmationNumber >= 10) {
           return callback(null, receipt)
         }
       })
       .on('error', console.error)
+      .then(function () {
+        return callback(null, null)
+      })
   }
 
 
@@ -153,23 +164,29 @@ class Pls {
   }
 
   settleBet(roundId, account, callback) {
-    return this.contract.methods.finalizeRound(roundId).send({from: account}, (err, info) => {
-      if (err) {
-        console.error(err)
-        return callback(err)
-      }
-      return this.withdrawBet(account, callback)
-    })
+    return this.contract.methods.finalizeRound(roundId).send({from: account})
+      .on('confirmation', function (confirmationNumber, receipt) {
+        if (confirmationNumber >= 5) {
+          return callback(null, receipt)
+        }
+      })
+      .on('error', console.error)
+      .then(function () {
+        return callback(null, null)
+      })
   }
 
   withdrawBet(account, callback) {
-    return this.contract.methods.withdraw().send({from: account}, (err, info) => {
-      if (err) {
-        console.error(err)
-        return callback(err)
-      }
-      return callback(err, info)
-    })
+    return this.contract.methods.withdraw().send({from: account})
+      .on('confirmation', function (confirmationNumber, receipt) {
+        if (confirmationNumber >= 5) {
+          return callback(null, receipt)
+        }
+      })
+      .on('error', console.error)
+      .then(function () {
+        return callback(null, null)
+      })
   }
 
 
@@ -179,7 +196,6 @@ class Pls {
         console.error(err)
         return callback(err)
       }
-      console.log('betRevealed', info)
       return callback(err, info)
     })
   }
@@ -196,13 +212,16 @@ class Pls {
 
 
   reviewerBet(account, betId, guess, nonce, secret, callback) {
-    return this.contract.methods.revealBet(betId, nonce, guess, this.web3.utils.utf8ToHex(secret)).send({from: account}, (err, info) => {
-      if (err) {
-        console.error(err)
-        return callback(err)
-      }
-      return callback(err, info)
-    })
+    return this.contract.methods.revealBet(betId, nonce, guess, this.web3.utils.utf8ToHex(secret)).send({from: account})
+      .on('confirmation', function (confirmationNumber, receipt) {
+        if (confirmationNumber == 5) {
+          return callback(null, receipt)
+        }
+      })
+      .on('error', console.error)
+      .then(function () {
+        return callback(null, null)
+      })
   }
 
   getWithdraw(account, callback) {
@@ -216,7 +235,6 @@ class Pls {
   }
 
   getBetIds(round, callback) {
-    console.log('round', round)
     return this.contract.methods.getBetIds(round).call({}, (err, info) => {
       if (err) {
         console.error(err)
@@ -256,7 +274,7 @@ class Pls {
         console.error(err)
         return callback(err)
       }
-      return callback(err, info)
+      return callback(err, this.bal2num(info))
     })
   }
 
